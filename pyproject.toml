@@ -10,13 +10,14 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115,<1.0",
+    "starlette>=1.7.0,<2.0",
     "pydantic-settings>=2.6,<3.0",
     "uvicorn[standard]>=0.34,<1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "httpx>=0.28,<1.0",
+    "httpx2",
     "pytest>=8.3,<9.0",
 ]
 
@@ -33,3 +34,8 @@ addopts = "-q"
 [tool.black]
 line-length = 100
 target-version = ["py311"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI uses Depends() in parameter defaults for dependency injection.
+# Treat this framework-specific pattern as intentional without disabling B008.
+extend-immutable-calls = ["fastapi.Depends"]

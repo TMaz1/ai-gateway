@@ -722,7 +722,7 @@ Current stack:
 * pytest
 * Uvicorn
 
-Provider communication will use `httpx` when the provider layer is introduced.
+Provider communication will use `httpx2` when the provider layer is introduced.
 
 No Redis, PostgreSQL, Docker, Kubernetes, message queue, or cloud dependency is
 required for the initial local implementation.

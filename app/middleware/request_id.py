@@ -1,52 +1,53 @@
 import re
 import secrets
+from collections.abc import Awaitable, Callable
+from typing import Any
 
-from starlette.datastructures import MutableHeaders
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
-
-
-_REQUEST_ID_PATTERN = re.compile(
-    r"^[A-Za-z0-9._:-]{1,128}$"
-)
+ASGIApp = Callable[[dict[str, Any], Callable, Callable], Awaitable[None]]
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 def new_request_id() -> str:
-    """
-    Generate a non-secret correlation ID.
-    """
     return secrets.token_hex(16)
 
 
-class RequestIdMiddleware(BaseHTTPMiddleware):
-    """
-    Attach a bounded request/correlation ID to every request.
+class RequestIdMiddleware:
+    """Pure ASGI request-ID middleware for normal and early responses."""
 
-    Caller-supplied IDs are accepted only when they conform to a conservative
-    character/length policy. Otherwise the gateway generates a new ID.
-    """
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
 
-    async def dispatch(
+    async def __call__(
         self,
-        request: Request,
-        call_next,
-    ) -> Response:
-        incoming = request.headers.get("X-Request-ID")
+        scope: dict[str, Any],
+        receive: Callable,
+        send: Callable,
+    ) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        if (
-            incoming
-            and _REQUEST_ID_PATTERN.fullmatch(incoming)
-        ):
-            request_id = incoming
-        else:
-            request_id = new_request_id()
+        incoming = (
+            dict(scope.get("headers", [])).get(b"x-request-id", b"").decode("latin-1")
+        )
+        request_id = (
+            incoming if _REQUEST_ID_PATTERN.fullmatch(incoming) else new_request_id()
+        )
 
-        request.state.request_id = request_id
+        state = scope.setdefault("state", {})
+        state["request_id"] = request_id
 
-        response = await call_next(request)
+        async def send_with_id(message: dict[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers = [
+                    (key, value)
+                    for key, value in headers
+                    if key.lower() != b"x-request-id"
+                ]
+                headers.append((b"x-request-id", request_id.encode("ascii")))
+                message["headers"] = headers
 
-        headers = MutableHeaders(response.headers)
-        headers["X-Request-ID"] = request_id
+            await send(message)
 
-        return response
+        await self.app(scope, receive, send_with_id)
