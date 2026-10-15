@@ -207,7 +207,7 @@ POST /ai/classify
 rather than:
 
 ```http
-POST /ollama/deepseek/classify
+POST /ollama/qwen/classify
 ```
 
 or:
@@ -238,7 +238,7 @@ classification
     |
     +----> Ollama
     |
-    +----> deepseek-r1:1.5b
+    +----> Qwen2.5:1.5B
 ```
 
 Changing the model should therefore normally require a gateway configuration/routing
@@ -1172,7 +1172,7 @@ Ollama 0.34.0
 and:
 
 ```text
-deepseek-r1:1.5b
+Qwen2.5:1.5B
 ```
 
 The gateway will communicate with Ollama through its HTTP API.
@@ -1243,7 +1243,7 @@ The caller will not be able to supply:
 Provider responses will be treated as untrusted and normalized before reaching
 the caller.
 
-DeepSeek reasoning/thinking output will never be exposed through the public
+Qwen reasoning/thinking output will never be exposed through the public
 classification response.
 
 ---
@@ -1293,7 +1293,7 @@ logical route
       |
       +---- Ollama
       |
-      +---- deepseek-r1:1.5b
+      +---- Qwen2.5:1.5b
 ```
 
 If the gateway later changes that route to another approved provider/model, the
@@ -1506,7 +1506,7 @@ Classification:
 * `/ai/classify`
 * strict input schema
 * trusted instruction isolation
-* DeepSeek/Ollama integration
+* Ollama integration
 * classification allowlist
 * normalized output
 * reasoning/thinking suppression

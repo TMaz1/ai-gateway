@@ -43,7 +43,6 @@ def _audit(
     try:
         events.record(event)
     except Exception:
-        # An audit-store outage must not turn a rejected request into a success.
         logger.exception(
             "security_audit_write_failed event_type=%s",
             event_type,
@@ -56,10 +55,6 @@ async def require_api_key(
     service: ApiKeyService = Depends(get_api_key_service),
 ) -> ApiKey:
     if credentials is None or credentials.scheme.lower() != "bearer":
-        logger.warning(
-            "authentication_failed request_id=%s reason=missing_credentials",
-            getattr(request.state, "request_id", None),
-        )
         _audit(
             request,
             event_type="authentication_denied",
@@ -74,10 +69,6 @@ async def require_api_key(
 
     api_key = service.validate(credentials.credentials)
     if api_key is None:
-        logger.warning(
-            "authentication_failed request_id=%s reason=invalid_credentials",
-            getattr(request.state, "request_id", None),
-        )
         _audit(
             request,
             event_type="authentication_denied",
@@ -138,7 +129,6 @@ async def _acquire_lease(
 
 
 def require_capability(capability: Capability | str) -> Callable:
-    """Authorize a capability and hold a concurrency lease during execution."""
     required_value = (
         capability.value if isinstance(capability, Capability) else capability
     )
@@ -147,7 +137,7 @@ def require_capability(capability: Capability | str) -> Callable:
         request: Request,
         api_key: ApiKey = Depends(require_api_key),
     ):
-        if not any(item.value == required_value for item in api_key.capabilities):
+        if required_value not in api_key.capabilities:
             _audit(
                 request,
                 event_type="capability_denied",
@@ -159,7 +149,6 @@ def require_capability(capability: Capability | str) -> Callable:
                 detail="The API key is not authorized for this capability.",
             )
 
-        # Check authorization before consuming a concurrency slot.
         lease = await _acquire_lease(request, api_key)
         try:
             yield api_key
@@ -170,8 +159,6 @@ def require_capability(capability: Capability | str) -> Callable:
 
 
 def require_concurrency_slot() -> Callable:
-    """Acquire a bounded request lease and release it after endpoint execution."""
-
     async def dependency(
         request: Request,
         api_key: ApiKey = Depends(require_api_key),

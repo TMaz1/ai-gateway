@@ -1,11 +1,15 @@
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.ai.capabilities import CapabilityRegistry
+from app.api.classification import router as classification_router
 from app.api.health import router as health_router
 from app.application.api_key_service import ApiKeyService
+from app.application.classification_service import ClassificationService
 from app.configuration.settings import get_settings
 from app.errors import (
     http_error_handler,
@@ -19,6 +23,7 @@ from app.infrastructure.persistence.database import Database
 from app.infrastructure.persistence.security_event_repository import (
     SqliteSecurityEventRepository,
 )
+from app.infrastructure.providers.ollama import OllamaProvider
 from app.logging_config import configure_logging
 from app.middleware.body_limit import RequestBodyLimitMiddleware
 from app.middleware.request_id import RequestIdMiddleware
@@ -34,11 +39,11 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Avoid creating files or opening the database during module import.
         database.initialize()
 
         key_repository = SqliteApiKeyRepository(database)
         events = SqliteSecurityEventRepository(database)
+        registry = CapabilityRegistry()
 
         app.state.settings = settings
         app.state.database = database
@@ -57,26 +62,50 @@ def create_app() -> FastAPI:
             settings.max_concurrent_global,
             settings.max_concurrent_per_key,
         )
+        app.state.capability_registry = registry
 
-        try:
-            yield
-        finally:
-            # SQLite connections are scoped to repository operations.
-            for name in (
-                "api_key_service",
-                "security_events",
-                "database",
-                "rate_limiter",
-                "concurrency_limiter",
-            ):
-                if hasattr(app.state, name):
-                    delattr(app.state, name)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(settings.provider_timeout_seconds),
+            follow_redirects=False,
+        ) as client:
+            provider = OllamaProvider(
+                client=client,
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_model,
+                timeout_seconds=settings.provider_timeout_seconds,
+                max_response_bytes=settings.max_provider_response_bytes,
+                max_output_tokens=settings.max_output_tokens,
+            )
+            app.state.provider = provider
+            app.state.classification_service = ClassificationService(
+                registry=registry,
+                provider=provider,
+                max_message_chars=settings.max_message_chars,
+                max_estimated_input_tokens=(settings.max_estimated_input_tokens),
+            )
+
+            try:
+                yield
+            finally:
+                for name in (
+                    "classification_service",
+                    "provider",
+                    "capability_registry",
+                    "api_key_service",
+                    "security_events",
+                    "database",
+                    "rate_limiter",
+                    "concurrency_limiter",
+                    "settings",
+                ):
+                    if hasattr(app.state, name):
+                        delattr(app.state, name)
 
     app = FastAPI(
         title="AI Gateway",
-        version="0.2.0",
+        version="0.3.0",
         description=(
-            "A policy-enforcing gateway foundation for text-focused AI capabilities."
+            "A policy-enforcing gateway for trusted, text-focused AI capabilities."
         ),
         docs_url="/docs" if settings.environment != "production" else None,
         redoc_url="/redoc" if settings.environment != "production" else None,
@@ -88,8 +117,6 @@ def create_app() -> FastAPI:
         },
     )
 
-    # Middleware is added in reverse wrapping order: request IDs must be
-    # outermost so early body-limit responses also carry the request ID.
     app.add_middleware(
         RequestBodyLimitMiddleware,
         max_body_bytes=settings.max_request_body_bytes,
@@ -97,6 +124,8 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIdMiddleware)
 
     app.include_router(health_router)
+    app.include_router(classification_router)
+
     return app
 
 
